@@ -19,7 +19,7 @@ export default async function ToolPage({ params }) {
   const t = tools.find((x) => x.slug === tool && x.ready);
   if (!t) notFound();
   return (
-    <section className="tool">
+    <section className="toolpage">
       <h1>{t.name}</h1>
       <p className="lead">{t.short}</p>
       <ToolRunner tool={t} />

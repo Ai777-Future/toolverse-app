@@ -1,15 +1,30 @@
 "use client";
 import { useRef, useState } from "react";
-import { mergePdfs, splitPdf, rotatePdf, imagesToPdf } from "@/lib/pdf";
+import { mergePdfs, splitPdf, removePages, extractPages, rotatePdf, addPageNumbers, addWatermark, imagesToPdf } from "@/lib/pdf";
+
+const DEFAULTS = { ranges: "", rotate: "90", position: "center", text: "CONFIDENTIAL" };
 
 export default function ToolRunner({ tool }) {
   const [files, setFiles] = useState([]);
-  const [opt, setOpt] = useState(tool.slug === "rotate-pdf" ? "90" : "");
+  const [opt, setOpt] = useState(DEFAULTS[tool.opt] ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState(null);
   const input = useRef(null);
   const min = tool.slug === "merge-pdf" ? 2 : 1;
+  const isPdf = tool.accept.includes("pdf");
+  const ok = files.length >= min && (!tool.req || opt.trim());
+
+  const actions = {
+    "merge-pdf": () => mergePdfs(files),
+    "split-pdf": () => splitPdf(files[0], opt),
+    "remove-pages": () => removePages(files[0], opt),
+    "extract-pages": () => extractPages(files[0], opt),
+    "rotate-pdf": () => rotatePdf(files[0], Number(opt)),
+    "add-page-numbers": () => addPageNumbers(files[0], opt),
+    "add-watermark": () => addWatermark(files[0], opt.trim()),
+    "jpg-to-pdf": () => imagesToPdf(files),
+  };
 
   const add = (list) => {
     const next = Array.from(list);
@@ -30,13 +45,8 @@ export default function ToolRunner({ tool }) {
   const run = async () => {
     setBusy(true);
     setError("");
-    setResult(null);
     try {
-      let out;
-      if (tool.slug === "merge-pdf") out = await mergePdfs(files);
-      else if (tool.slug === "split-pdf") out = await splitPdf(files[0], opt);
-      else if (tool.slug === "rotate-pdf") out = await rotatePdf(files[0], Number(opt));
-      else out = await imagesToPdf(files);
+      const out = await actions[tool.slug]();
       setResult({ url: URL.createObjectURL(out.blob), name: out.name });
     } catch (e) {
       setError(e.message || "This file could not be processed. Check that it is valid and not password protected.");
@@ -46,69 +56,83 @@ export default function ToolRunner({ tool }) {
 
   if (result) {
     return (
-      <div className="panel done">
+      <div className="center done">
         <h2>Your file is ready</h2>
-        <a className="btn" href={result.url} download={result.name}>Download {result.name}</a>
-        <button className="btn ghost" onClick={reset}>Start over</button>
+        <a className="big" href={result.url} download={result.name}>Download {result.name}</a>
+        <button className="link" onClick={reset}>Process another file</button>
       </div>
     );
   }
 
   return (
-    <div>
-      <div
-        className="drop"
-        onClick={() => input.current.click()}
-        onDragOver={(e) => e.preventDefault()}
-        onDrop={(e) => { e.preventDefault(); add(e.dataTransfer.files); }}
-      >
-        <strong>{files.length && tool.multiple ? "Add more files" : "Select files"}</strong>
-        <span>or drop them here</span>
-        <input ref={input} type="file" hidden accept={tool.accept} multiple={tool.multiple}
-          onChange={(e) => { add(e.target.files); e.target.value = ""; }} />
-      </div>
+    <div className="center"
+      onDragOver={(e) => e.preventDefault()}
+      onDrop={(e) => { e.preventDefault(); add(e.dataTransfer.files); }}>
+      {files.length === 0 ? (
+        <>
+          <button className="big" onClick={() => input.current.click()}>
+            Select {isPdf ? "PDF" : "image"} {tool.multiple ? "files" : "file"}
+          </button>
+          <p className="hint">or drop {tool.multiple ? "files" : "a file"} here</p>
+        </>
+      ) : (
+        <div className="panel">
+          <ul className="files">
+            {files.map((f, i) => (
+              <li key={f.name + i}>
+                <span className="fname">{f.name}</span>
+                <span className="acts">
+                  {tool.multiple && files.length > 1 && (
+                    <>
+                      <button onClick={() => move(i, -1)}>Up</button>
+                      <button onClick={() => move(i, 1)}>Down</button>
+                    </>
+                  )}
+                  <button onClick={() => remove(i)}>Remove</button>
+                </span>
+              </li>
+            ))}
+          </ul>
+          {tool.multiple && <button className="link" onClick={() => input.current.click()}>Add more files</button>}
 
-      {files.length > 0 && (
-        <ul className="files">
-          {files.map((f, i) => (
-            <li key={f.name + i}>
-              <span className="fname">{f.name}</span>
-              <span className="acts">
-                {tool.multiple && files.length > 1 && (
-                  <>
-                    <button onClick={() => move(i, -1)} aria-label="Move up">Up</button>
-                    <button onClick={() => move(i, 1)} aria-label="Move down">Down</button>
-                  </>
-                )}
-                <button onClick={() => remove(i)}>Remove</button>
-              </span>
-            </li>
-          ))}
-        </ul>
+          {tool.opt === "ranges" && (
+            <label className="opt">Pages{tool.req ? "" : " (optional)"}
+              <input value={opt} onChange={(e) => setOpt(e.target.value)}
+                placeholder={tool.req ? "Example: 1-3, 5, 8-10" : "Example: 1-3, 5. Leave empty for one file per page."} />
+            </label>
+          )}
+          {tool.opt === "rotate" && (
+            <label className="opt">Rotate by
+              <select value={opt} onChange={(e) => setOpt(e.target.value)}>
+                <option value="90">90 degrees clockwise</option>
+                <option value="180">180 degrees</option>
+                <option value="270">90 degrees counterclockwise</option>
+              </select>
+            </label>
+          )}
+          {tool.opt === "position" && (
+            <label className="opt">Position
+              <select value={opt} onChange={(e) => setOpt(e.target.value)}>
+                <option value="left">Bottom left</option>
+                <option value="center">Bottom center</option>
+                <option value="right">Bottom right</option>
+              </select>
+            </label>
+          )}
+          {tool.opt === "text" && (
+            <label className="opt">Watermark text
+              <input value={opt} onChange={(e) => setOpt(e.target.value)} placeholder="Use plain letters and numbers" />
+            </label>
+          )}
+
+          {error && <p className="err">{error}</p>}
+          {files.length < min && <p className="hint">Add at least {min} files to continue.</p>}
+          <button className="big" disabled={busy || !ok} onClick={run}>{busy ? "Working..." : tool.name}</button>
+        </div>
       )}
-
-      {files.length > 0 && tool.slug === "split-pdf" && (
-        <label className="opt">Page ranges (optional)
-          <input value={opt} onChange={(e) => setOpt(e.target.value)} placeholder="Example: 1-3, 5, 8-10. Leave empty for one file per page." />
-        </label>
-      )}
-      {files.length > 0 && tool.slug === "rotate-pdf" && (
-        <label className="opt">Rotate by
-          <select value={opt} onChange={(e) => setOpt(e.target.value)}>
-            <option value="90">90 degrees clockwise</option>
-            <option value="180">180 degrees</option>
-            <option value="270">90 degrees counterclockwise</option>
-          </select>
-        </label>
-      )}
-
-      {error && <p className="err">{error}</p>}
-      {files.length > 0 && files.length < min && <p className="hint">Add at least {min} files to continue.</p>}
-
-      <button className="btn" disabled={busy || files.length < min} onClick={run}>
-        {busy ? "Working..." : tool.name}
-      </button>
-      <p className="hint">Files are processed in your browser and are never uploaded to a server.</p>
+      <input ref={input} type="file" hidden accept={tool.accept} multiple={tool.multiple}
+        onChange={(e) => { add(e.target.files); e.target.value = ""; }} />
+      <p className="private">Your files are processed in your browser and never uploaded.</p>
     </div>
   );
 }
