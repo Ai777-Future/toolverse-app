@@ -1,8 +1,8 @@
 "use client";
 import { useRef, useState } from "react";
-import { mergePdfs, splitPdf, removePages, extractPages, rotatePdf, addPageNumbers, addWatermark, imagesToPdf } from "@/lib/pdf";
+import { mergePdfs, splitPdf, removePages, extractPages, rotatePdf, addPageNumbers, addWatermark, imagesToPdf, pdfToJpg, cropPdf, signPdf } from "@/lib/pdf";
 
-const DEFAULTS = { ranges: "", rotate: "90", position: "center", text: "CONFIDENTIAL" };
+const DEFAULTS = { ranges: "", rotate: "90", position: "center", text: "CONFIDENTIAL", crop: "10", sign: "right" };
 
 export default function ToolRunner({ tool }) {
   const [files, setFiles] = useState([]);
@@ -11,9 +11,11 @@ export default function ToolRunner({ tool }) {
   const [error, setError] = useState("");
   const [result, setResult] = useState(null);
   const input = useRef(null);
+  const pad = useRef(null);
+  const [signed, setSigned] = useState(false);
   const min = tool.slug === "merge-pdf" ? 2 : 1;
   const isPdf = tool.accept.includes("pdf");
-  const ok = files.length >= min && (!tool.req || opt.trim());
+  const ok = files.length >= min && (!tool.req || opt.trim()) && (tool.opt !== "sign" || signed);
 
   const actions = {
     "merge-pdf": () => mergePdfs(files),
@@ -24,6 +26,9 @@ export default function ToolRunner({ tool }) {
     "add-page-numbers": () => addPageNumbers(files[0], opt),
     "add-watermark": () => addWatermark(files[0], opt.trim()),
     "jpg-to-pdf": () => imagesToPdf(files),
+    "pdf-to-jpg": () => pdfToJpg(files[0]),
+    "crop-pdf": () => cropPdf(files[0], Number(opt)),
+    "sign-pdf": () => signPdf(files[0], pad.current.toDataURL("image/png"), opt),
   };
 
   const add = (list) => {
@@ -32,7 +37,7 @@ export default function ToolRunner({ tool }) {
     setError("");
     setFiles(tool.multiple ? [...files, ...next] : next.slice(0, 1));
   };
-  const remove = (i) => setFiles(files.filter((_, k) => k !== i));
+  const remove = (i) => { setFiles(files.filter((_, k) => k !== i)); setSigned(false); };
   const move = (i, d) => {
     const c = [...files];
     const j = i + d;
@@ -110,7 +115,7 @@ export default function ToolRunner({ tool }) {
               </select>
             </label>
           )}
-          {tool.opt === "position" && (
+          {(tool.opt === "position" || tool.opt === "sign") && (
             <label className="opt">Position
               <select value={opt} onChange={(e) => setOpt(e.target.value)}>
                 <option value="left">Bottom left</option>
@@ -125,6 +130,17 @@ export default function ToolRunner({ tool }) {
             </label>
           )}
 
+          {tool.opt === "crop" && (
+            <label className="opt">Crop margin in millimetres, from every side
+              <input type="number" min="1" value={opt} onChange={(e) => setOpt(e.target.value)} />
+            </label>
+          )}
+          {tool.opt === "sign" && (
+            <div className="opt">Draw your signature below
+              <SignPad canvasRef={pad} onDraw={() => setSigned(true)} />
+              <button className="link" onClick={() => { const c = pad.current; c.getContext("2d").clearRect(0, 0, c.width, c.height); setSigned(false); }}>Clear signature</button>
+            </div>
+          )}
           {error && <p className="err">{error}</p>}
           {files.length < min && <p className="hint">Add at least {min} files to continue.</p>}
           <button className="big" disabled={busy || !ok} onClick={run}>{busy ? "Working..." : tool.name}</button>
@@ -135,4 +151,27 @@ export default function ToolRunner({ tool }) {
       <p className="private">Your files are processed in your browser and never uploaded.</p>
     </div>
   );
+}
+
+function SignPad({ canvasRef, onDraw }) {
+  const drawing = useRef(false);
+  const pt = (e) => {
+    const c = e.currentTarget, r = c.getBoundingClientRect();
+    return [(e.clientX - r.left) * (c.width / r.width), (e.clientY - r.top) * (c.height / r.height)];
+  };
+  const down = (e) => {
+    const ctx = e.currentTarget.getContext("2d");
+    drawing.current = true;
+    ctx.lineWidth = 3; ctx.lineCap = "round"; ctx.strokeStyle = "#1b1233";
+    ctx.beginPath(); ctx.moveTo(...pt(e));
+    e.currentTarget.setPointerCapture(e.pointerId);
+    onDraw();
+  };
+  const move = (e) => {
+    if (!drawing.current) return;
+    const ctx = e.currentTarget.getContext("2d");
+    ctx.lineTo(...pt(e)); ctx.stroke();
+  };
+  return <canvas ref={canvasRef} className="pad" width={560} height={180}
+    onPointerDown={down} onPointerMove={move} onPointerUp={() => { drawing.current = false; }} />;
 }
